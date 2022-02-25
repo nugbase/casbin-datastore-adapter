@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/casbin/casbin/v2/model"
+	"github.com/casbin/casbin/model"
 )
 
 func TestSaveAndLoadModel(t *testing.T) {

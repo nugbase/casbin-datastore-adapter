@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"cloud.google.com/go/datastore"
-	"github.com/casbin/casbin/v2"
+	"github.com/casbin/casbin"
 )
 
 var testProjectID = os.Getenv("TEST_CASBIN_DATASTORE_PROJECT_ID")

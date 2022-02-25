@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	"strings"
+	"time"
 
 	"cloud.google.com/go/datastore"
 	"github.com/casbin/casbin/model"
@@ -24,6 +26,57 @@ type CasbinRule struct {
 	V5    string `datastore:"v5"`
 }
 
+// String version of the Casbin rule (CSV basically). Usable as a database key
+func (cr *CasbinRule) String() string {
+	res := ""
+
+	appendOrTerminate := func(currentStr, strToAdd string) (string, bool) {
+		tmp := strings.TrimSpace(strToAdd)
+		if tmp == "" {
+			return currentStr, false
+		} else {
+			if currentStr == "" {
+				return tmp, true
+			} else {
+				return currentStr + "," + tmp, true
+			}
+		}
+	}
+
+	res, added := appendOrTerminate(res, cr.PType)
+	if !added {
+		return res
+	}
+
+	res, added = appendOrTerminate(res, cr.V0)
+	if !added {
+		return res
+	}
+
+	res, added = appendOrTerminate(res, cr.V1)
+	if !added {
+		return res
+	}
+
+	res, added = appendOrTerminate(res, cr.V2)
+	if !added {
+		return res
+	}
+
+	res, added = appendOrTerminate(res, cr.V3)
+	if !added {
+		return res
+	}
+
+	res, added = appendOrTerminate(res, cr.V4)
+	if !added {
+		return res
+	}
+
+	res, added = appendOrTerminate(res, cr.V5)
+	return res
+}
+
 type Config struct {
 	// Datastore kind name.
 	// Optional. (Default: "casbin")
@@ -31,13 +84,21 @@ type Config struct {
 	// Datastore namespace.
 	// Optional. (Default: "")
 	Namespace string
+	// Enables debug info to show database calls
+	Debug bool
+
+	// Configures max time for long running operations like LoadPolicy,
+	// SavePolicy, RemoveFilteredPolicy. These may take seconds or minutes
+	LoadSaveFilterDeadline time.Duration
+	// Configures max time for quick incremental operations like AddPolicy
+	// and RemovePolicy. These largely take under 150ms
+	AddRemoveDeadline time.Duration
 }
 
 // adapter represents the GCP datastore adapter for policy storage.
 type adapter struct {
-	db        *datastore.Client
-	kind      string
-	namespace string
+	db     *datastore.Client
+	config Config
 }
 
 // finalizer is the destructor for adapter.
@@ -51,16 +112,28 @@ func (a *adapter) close() {
 
 // NewAdapter is the constructor for Adapter. A valid datastore client must be provided.
 func NewAdapter(db *datastore.Client) persist.Adapter {
-	return NewAdapterWithConfig(db, Config{casbinKind, ""})
+	return NewAdapterWithConfig(db, Config{})
 }
 
 // NewAdapter is the constructor for Adapter. A valid datastore client must be provided.
 func NewAdapterWithConfig(db *datastore.Client, config Config) persist.Adapter {
-	kind := casbinKind
-	if config.Kind != "" {
-		kind = config.Kind
+	// Initializing config default values
+	if strings.TrimSpace(config.Kind) == "" {
+		config.Kind = casbinKind
 	}
-	a := &adapter{db, kind, config.Namespace}
+	// Namespace default value of "" is okay
+	// Debug default value of false is okay
+	if config.LoadSaveFilterDeadline == 0 {
+		config.LoadSaveFilterDeadline = time.Minute * 10
+	}
+	if config.AddRemoveDeadline == 0 {
+		config.AddRemoveDeadline = time.Second * 30
+	}
+
+	a := &adapter{
+		db:     db,
+		config: config,
+	}
 
 	// Call the destructor when the object is released.
 	runtime.SetFinalizer(a, finalizer)
@@ -68,21 +141,28 @@ func NewAdapterWithConfig(db *datastore.Client, config Config) persist.Adapter {
 	return a
 }
 
+// Datastore works most consistently if all data is inside an entity group.
+// Kinda weird, but this is how you enable ACID (instead of eventual).
+// See: https://cloud.google.com/datastore/docs/articles/balancing-strong-and-eventual-consistency-with-google-cloud-datastore#ancestor-query-and-entity-group
 func (a *adapter) pseudoRootKey() *datastore.Key {
-	key := datastore.IDKey(a.kind, 1, nil)
-	key.Namespace = a.namespace
+	key := datastore.IDKey(a.config.Kind, 1, nil)
+	key.Namespace = a.config.Namespace
 	return key
 }
 
 func (a *adapter) newQuery() *datastore.Query {
-	return datastore.NewQuery(a.kind).Namespace(a.namespace).Filter("ptype >", "").Ancestor(a.pseudoRootKey())
+	return datastore.NewQuery(a.config.Kind).Namespace(a.config.Namespace).Filter("ptype >", "").Ancestor(a.pseudoRootKey())
 }
 
 func (a *adapter) LoadPolicy(model model.Model) error {
 	var rules []*CasbinRule
-	log.Println("[LoadPolicy] called")
+	if a.config.Debug {
+		log.Println("[LoadPolicy] called - getting all db entries")
+	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(
+		context.Background(), a.config.LoadSaveFilterDeadline)
+	defer cancel()
 	query := a.newQuery()
 	_, err := a.db.GetAll(ctx, query, &rules)
 
@@ -98,17 +178,23 @@ func (a *adapter) LoadPolicy(model model.Model) error {
 }
 
 func (a *adapter) SavePolicy(model model.Model) error {
-	ctx := context.Background()
-	log.Println("[SavePolicy] called")
+	ctx, cancel := context.WithTimeout(
+		context.Background(), a.config.LoadSaveFilterDeadline)
+	defer cancel()
+	if a.config.Debug {
+		log.Println("[SavePolicy] called")
+	}
 
 	// Drop all casbin entities
 	keys, err := a.db.GetAll(ctx, a.newQuery().KeysOnly(), nil)
 	if err != nil {
 		return err
 	}
-	log.Println("[SavePolicy] keys to drop:", keys)
+	if a.config.Debug {
+		log.Println("[SavePolicy] keys to drop:", keys)
+	}
 
-	var lines []interface{}
+	var lines []*CasbinRule
 
 	for ptype, ast := range model["p"] {
 		for _, rule := range ast.Policy {
@@ -129,11 +215,14 @@ func (a *adapter) SavePolicy(model model.Model) error {
 		if err = tx.DeleteMulti(keys); err != nil {
 			return err
 		}
-		log.Println("[SavePolicy] keys deleted")
+		if a.config.Debug {
+			log.Println("[SavePolicy] keys deleted")
+		}
 
 		for _, line := range lines {
-			key := datastore.IncompleteKey(a.kind, ancestor)
-			key.Namespace = a.namespace
+			name := line.String()
+			key := datastore.NameKey(a.config.Kind, name, ancestor)
+			key.Namespace = a.config.Namespace
 			_, err := tx.Put(key, line)
 			if err != nil {
 				return err
@@ -147,47 +236,47 @@ func (a *adapter) SavePolicy(model model.Model) error {
 }
 
 func (a *adapter) AddPolicy(sec string, ptype string, rule []string) error {
-	log.Println("[AddPolicy] called")
-	ctx := context.Background()
+	if a.config.Debug {
+		log.Println("[AddPolicy] called")
+	}
+	ctx, cancel := context.WithTimeout(
+		context.Background(), a.config.AddRemoveDeadline)
+	defer cancel()
 	line := savePolicyLine(ptype, rule)
 
-	key := datastore.IncompleteKey(a.kind, a.pseudoRootKey())
-	key.Namespace = a.namespace
+	name := line.String()
+	key := datastore.NameKey(a.config.Kind, name, a.pseudoRootKey())
+	key.Namespace = a.config.Namespace
 	_, err := a.db.Put(ctx, key, &line)
 	return err
 }
 
 func (a *adapter) RemovePolicy(sec string, ptype string, rule []string) error {
-	log.Println("[RemovePolicy] called")
-	var rules []*CasbinRule
+	if a.config.Debug {
+		log.Println("[RemovePolicy] called")
+	}
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(), a.config.AddRemoveDeadline)
+	defer cancel()
 
 	line := savePolicyLine(ptype, rule)
+	name := line.String()
+	key := datastore.NameKey(a.config.Kind, name, a.pseudoRootKey())
 
-	ctx := context.Background()
-	query := a.newQuery().
-		Filter("ptype =", line.PType).
-		Filter("v0 =", line.V0).
-		Filter("v1 =", line.V1).
-		Filter("v2 =", line.V2).
-		Filter("v3 =", line.V3).
-		Filter("v4 =", line.V4)
-
-	keys, err := a.db.GetAll(ctx, query, &rules)
-	if err != nil {
-		switch err {
-		case datastore.ErrNoSuchEntity:
-			return nil
-		default:
-			return err
-		}
-	}
-	return a.db.DeleteMulti(ctx, keys)
+	return a.db.Delete(ctx, key)
 }
 
-func (a *adapter) RemoveFilteredPolicy(sec string, ptype string, fieldIndex int, fieldValues ...string) error {
-	log.Println("[RemoveFilteredPolicy] called")
+func (a *adapter) RemoveFilteredPolicy(sec string, ptype string,
+	fieldIndex int, fieldValues ...string) error {
 
-	ctx := context.Background()
+	if a.config.Debug {
+		log.Println("[RemoveFilteredPolicy] called")
+	}
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(), a.config.LoadSaveFilterDeadline)
+	defer cancel()
 
 	var rules []*CasbinRule
 
@@ -239,6 +328,7 @@ func (a *adapter) RemoveFilteredPolicy(sec string, ptype string, fieldIndex int,
 			return err
 		}
 	}
+
 	return a.db.DeleteMulti(ctx, keys)
 }
 

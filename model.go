@@ -36,7 +36,9 @@ func SaveModelWithConfig(db *datastore.Client, path string, config Config) error
 	}
 	namespace := config.Namespace
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(
+		context.Background(), config.LoadSaveFilterDeadline)
+	defer cancel()
 	_, err = db.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
 		key := datastore.NameKey(kind, "conf", nil)
 		key.Namespace = namespace
@@ -64,7 +66,9 @@ func LoadModelWithConfig(db *datastore.Client, config Config) (model.Model, erro
 	key := datastore.NameKey(kind, "conf", nil)
 	key.Namespace = namespace
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(
+		context.Background(), config.LoadSaveFilterDeadline)
+	defer cancel()
 	var conf CasbinModelConf
 	if err := db.Get(ctx, key, &conf); err != nil {
 		return nil, err
