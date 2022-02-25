@@ -3,6 +3,7 @@ package datastoreadapter
 import (
 	"context"
 	"fmt"
+	"log"
 	"runtime"
 
 	"cloud.google.com/go/datastore"
@@ -74,11 +75,12 @@ func (a *adapter) pseudoRootKey() *datastore.Key {
 }
 
 func (a *adapter) newQuery() *datastore.Query {
-	return datastore.NewQuery(a.kind).Namespace(a.namespace).Filter("p_type >", "").Ancestor(a.pseudoRootKey())
+	return datastore.NewQuery(a.kind).Namespace(a.namespace).Filter("ptype >", "").Ancestor(a.pseudoRootKey())
 }
 
 func (a *adapter) LoadPolicy(model model.Model) error {
 	var rules []*CasbinRule
+	log.Println("[LoadPolicy] called")
 
 	ctx := context.Background()
 	query := a.newQuery()
@@ -97,12 +99,14 @@ func (a *adapter) LoadPolicy(model model.Model) error {
 
 func (a *adapter) SavePolicy(model model.Model) error {
 	ctx := context.Background()
+	log.Println("[SavePolicy] called")
 
 	// Drop all casbin entities
 	keys, err := a.db.GetAll(ctx, a.newQuery().KeysOnly(), nil)
 	if err != nil {
 		return err
 	}
+	log.Println("[SavePolicy] keys to drop:", keys)
 
 	var lines []interface{}
 
@@ -125,6 +129,7 @@ func (a *adapter) SavePolicy(model model.Model) error {
 		if err = tx.DeleteMulti(keys); err != nil {
 			return err
 		}
+		log.Println("[SavePolicy] keys deleted")
 
 		for _, line := range lines {
 			key := datastore.IncompleteKey(a.kind, ancestor)
@@ -142,6 +147,7 @@ func (a *adapter) SavePolicy(model model.Model) error {
 }
 
 func (a *adapter) AddPolicy(sec string, ptype string, rule []string) error {
+	log.Println("[AddPolicy] called")
 	ctx := context.Background()
 	line := savePolicyLine(ptype, rule)
 
@@ -152,13 +158,14 @@ func (a *adapter) AddPolicy(sec string, ptype string, rule []string) error {
 }
 
 func (a *adapter) RemovePolicy(sec string, ptype string, rule []string) error {
+	log.Println("[RemovePolicy] called")
 	var rules []*CasbinRule
 
 	line := savePolicyLine(ptype, rule)
 
 	ctx := context.Background()
 	query := a.newQuery().
-		Filter("p_type =", line.PType).
+		Filter("ptype =", line.PType).
 		Filter("v0 =", line.V0).
 		Filter("v1 =", line.V1).
 		Filter("v2 =", line.V2).
@@ -178,13 +185,14 @@ func (a *adapter) RemovePolicy(sec string, ptype string, rule []string) error {
 }
 
 func (a *adapter) RemoveFilteredPolicy(sec string, ptype string, fieldIndex int, fieldValues ...string) error {
+	log.Println("[RemoveFilteredPolicy] called")
 
 	ctx := context.Background()
 
 	var rules []*CasbinRule
 
 	selector := make(map[string]interface{})
-	selector["p_type"] = ptype
+	selector["ptype"] = ptype
 
 	if fieldIndex <= 0 && 0 < fieldIndex+len(fieldValues) {
 		if fieldValues[0-fieldIndex] != "" {
