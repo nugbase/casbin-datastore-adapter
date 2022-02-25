@@ -6,21 +6,30 @@ import (
 	"runtime"
 
 	"cloud.google.com/go/datastore"
-	"github.com/casbin/casbin/v2/model"
-	"github.com/casbin/casbin/v2/persist"
+	"github.com/casbin/casbin/model"
+	"github.com/casbin/casbin/persist"
 )
 
 const casbinKind = "casbin"
 
 // CasbinRule represents a rule in Casbin.
 type CasbinRule struct {
-	PType string `datastore:"p_type"`
+	PType string `datastore:"ptype"`
 	V0    string `datastore:"v0"`
 	V1    string `datastore:"v1"`
 	V2    string `datastore:"v2"`
 	V3    string `datastore:"v3"`
 	V4    string `datastore:"v4"`
 	V5    string `datastore:"v5"`
+}
+
+type Config struct {
+	// Datastore kind name.
+	// Optional. (Default: "casbin")
+	Kind string
+	// Datastore namespace.
+	// Optional. (Default: "")
+	Namespace string
 }
 
 // adapter represents the GCP datastore adapter for policy storage.

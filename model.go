@@ -5,7 +5,7 @@ import (
 	"io/ioutil"
 
 	"cloud.google.com/go/datastore"
-	"github.com/casbin/casbin/v2/model"
+	"github.com/casbin/casbin/model"
 )
 
 type CasbinModelConf struct {
