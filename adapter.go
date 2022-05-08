@@ -236,9 +236,6 @@ func (a *adapter) SavePolicy(model model.Model) error {
 }
 
 func (a *adapter) AddPolicy(sec string, ptype string, rule []string) error {
-	if a.config.Debug {
-		log.Println("[AddPolicy] called")
-	}
 	ctx, cancel := context.WithTimeout(
 		context.Background(), a.config.AddRemoveDeadline)
 	defer cancel()
@@ -247,15 +244,16 @@ func (a *adapter) AddPolicy(sec string, ptype string, rule []string) error {
 	name := line.String()
 	key := datastore.NameKey(a.config.Kind, name, a.pseudoRootKey())
 	key.Namespace = a.config.Namespace
+
+	if a.config.Debug {
+		log.Println("[AddPolicy] called:", name)
+	}
+
 	_, err := a.db.Put(ctx, key, &line)
 	return err
 }
 
 func (a *adapter) RemovePolicy(sec string, ptype string, rule []string) error {
-	if a.config.Debug {
-		log.Println("[RemovePolicy] called")
-	}
-
 	ctx, cancel := context.WithTimeout(
 		context.Background(), a.config.AddRemoveDeadline)
 	defer cancel()
@@ -263,6 +261,10 @@ func (a *adapter) RemovePolicy(sec string, ptype string, rule []string) error {
 	line := savePolicyLine(ptype, rule)
 	name := line.String()
 	key := datastore.NameKey(a.config.Kind, name, a.pseudoRootKey())
+
+	if a.config.Debug {
+		log.Println("[RemovePolicy] called:", name)
+	}
 
 	return a.db.Delete(ctx, key)
 }
