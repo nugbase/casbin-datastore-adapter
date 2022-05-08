@@ -239,8 +239,8 @@ func (a *adapter) AddPolicy(sec string, ptype string, rule []string) error {
 	ctx, cancel := context.WithTimeout(
 		context.Background(), a.config.AddRemoveDeadline)
 	defer cancel()
-	line := savePolicyLine(ptype, rule)
 
+	line := savePolicyLine(ptype, rule)
 	name := line.String()
 	key := datastore.NameKey(a.config.Kind, name, a.pseudoRootKey())
 	key.Namespace = a.config.Namespace
@@ -261,6 +261,7 @@ func (a *adapter) RemovePolicy(sec string, ptype string, rule []string) error {
 	line := savePolicyLine(ptype, rule)
 	name := line.String()
 	key := datastore.NameKey(a.config.Kind, name, a.pseudoRootKey())
+	key.Namespace = a.config.Namespace
 
 	if a.config.Debug {
 		log.Println("[RemovePolicy] called:", name)
